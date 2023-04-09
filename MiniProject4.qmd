@@ -1,0 +1,53 @@
+---
+title: "MiniProject4"
+format: html
+editor: visual
+---
+
+```{r echo=TRUE,message=FALSE}
+# Look at day22(redlining) for leaftlet examples
+library(tidyverse)
+library(maps)
+library(mapdata)
+library(tidyverse)
+library(sf)     # R wrapper around GDAL/OGR
+library(leaflet)    # for fortifying shapefiles
+library(leaflet.extras)   # For leaflet heatmaps
+```
+
+```{r}
+# Read in the communities data
+# DSN - location of shp files
+# Layer - name of all the files (different extensions, same name)
+mn_comm <- st_read(dsn="Communities-SHP/", layer="Minneapolis_Communities")
+glimpse(mn_comm)
+```
+```{r}
+neighPal <- colorFactor(palette="YlGnBu",
+                                 domain=mn_comm$CommName)
+mn_comm |> 
+  leaflet() |> 
+  addTiles() |> 
+  addPolygons(weight = 1,
+              color = "white",
+              fillColor = ~neighPal(CommName),
+              fillOpacity = 0.3,
+              popup = ~FID) |> 
+  addLegend(
+    title = "Neighborhood Rating",
+    pal = neighPal,
+    values = ~CommName,
+    opacity = 0.6
+  )
+```
+
+
+
+
+
+
+
+
+
+
+
