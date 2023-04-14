@@ -1,9 +1,10 @@
-=---
+---
 title: "MiniProject4"
 format: html
 editor: visual
 ---
 
+# Question: Are some communities in Minneapolis more dangerous than other Communities in terms of crime?
 
 ```{r echo=TRUE,message=FALSE}
 # Look at day22(redlining) for leaftlet examples
@@ -65,6 +66,7 @@ pre <-
     values = ~PRECINCT,
     opacity = 0.6
   )
+pre
 ```
 
 ## Scrape information from some random website. Couldn't find an open dataset of neighborhoods grouped by community, could also just use a heatmap for neighborhoods (prob. much better).
@@ -113,7 +115,7 @@ cleaned <- list()
 for (list in neigh_list){
   # Find dots, $, 0-9 and comma and replace with nothing
   list <- gsub("[.$0-9,]", "", list)
-  # Replace dashed in neighborhood names with spaces instead
+  # Replace dashes/forward slah in neighborhood names with spaces instead
   list <- gsub("[-/]", " ", list)
   # Remove trailing white space from strings in list
   list <- trimws(list)
@@ -144,6 +146,10 @@ colnames(df1)[1] <- "Community"
 colnames(df1)[2] <- "Neighborhood"
 #df1
 
+# Correct some differences in naming between scraped and open dataset.
+police_force <- police_force |>
+  mutate(Neighborho = gsub(" - ", " ", Neighborho),
+         Neighborho = gsub("[.']", "", Neighborho))
 # Check neighborhood names in police_force/new dataframe
 filtered <- police_force |>
   distinct(police_force$Neighborho)
@@ -166,31 +172,6 @@ df1[nrow(df1) + 1,] <- c("University", "Prospect Park East River Road")
 
 #write.csv(df1, "some_name.csv")
 ```
-## Manipulate names for communities in police force dataframe.
-
-```{r}
-#glimpse(police_force)
-# Keep every neighborhood listed in mn_comm
-# What kind of join for this one?
-# First summarize the data?
-police_force |>
-  group_by(Neighborho) |>
-  summarize(
-            numCrimes = n())
-
-# remove commas, dots, and dashes because of my dataframe (just merging)
-# group by community because that's what I was originally interested in.
-police_force |>
-  distinct(police_force$Neighborho)
-
-police_force <- police_force |>
-  mutate(Neighborho = gsub(" - ", " ", Neighborho),
-         Neighborho = gsub("[.']", "", Neighborho))
-  
-police_force |>
-  distinct(police_force$Neighborho)
-
-```
 ## Aggregate number of crimes to attach to communitys in Minneapolis.
 
 ```{r}
@@ -198,20 +179,28 @@ police_force |>
 aggregated <- police_force |>
   inner_join(df1, c("Neighborho" = "Neighborhood"))
 
-#glimpse(aggregated)
+glimpse(aggregated)
+
+police_force
+
+aggregated <- aggregated |>
+  mutate(is_m = if(Sex == "Male"){1}else{0},
+         is_f = if(Sex == "Female"){1}else{0})
 
 summ <- aggregated |>
   group_by(Community) |>
-  summarize(num_crimes = n())
-#view(summ)
+  summarize(num_crimes = n(),
+            rate_m=sum(aggregated$Sex=="Male"),
+            rate_f=sum(aggregated$Sex=="Male"))
+view(summ)
 
 # have to drop geometry to join with other spatial data frame (mn_comm)
 summ <- st_drop_geometry(summ)
 mn_comm <- mn_comm |>
   inner_join(summ, by=c("CommName"="Community"))
-mn_comm
+#mn_comm
 ```
-
+## In the following choropleth map, community boundaries are drawn on the map. On top of it, there is also another layer for the five police precincts in Minneapolis. From the choropleth, we can conclude that some communities are more dangerous than others, but this could also be because the population size in the city is denser than in the suburbs. We can also see that you are more likely to be shot by an officer or killed in the more dangerous communities. Population size is a question that I would delve into in the future by finding a dataset for populations per neighborhood or by the community to further illustrate in this map.
 
 ```{r}
 # https://rstudio.github.io/leaflet/choropleths.html
@@ -228,21 +217,6 @@ labels <- sprintf(
   mn_comm$CommName, mn_comm$num_crimes
 ) %>% lapply(htmltools::HTML)
 
-# mn <- pre |>
-#   addPolygons(data=mn_comm,
-#               weight = 1,
-#               color = "white",
-#               fillColor = ~neighPal(CommName),
-#               fillOpacity = 0.3,
-#               highlight = highlightOptions(weight=3,
-#                                            color="red",
-#                                            bringToFront=TRUE),
-#               label=labels,
-#               labelOptions = labelOptions(style=list("font-weight"="normal"
-#                                                  ,padding="3px 8px"),
-#                                           textsize = "15px",
-#                                           direction = "auto"))
-# mn
 mn <- pre |>
   addPolygons(data=mn_comm,
               weight = 1,
@@ -269,8 +243,4 @@ mn |>
              radius=4,
              # popup=~as.character(SubjectFat),
              stroke=FALSE, fillOpacity=1)
-```
-
-
-```{r}
 ```
