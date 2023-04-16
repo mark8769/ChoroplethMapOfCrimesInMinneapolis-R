@@ -4,7 +4,9 @@ format: html
 editor: visual
 ---
 
-# Question: Are some communities in Minneapolis more dangerous than other Communities in terms of crime?
+# Question: 
+
+Are some communities in Minneapolis more dangerous than other Communities in terms of crime? Are some police precincts more violent than others?
 
 ```{r echo=TRUE,message=FALSE}
 # Look at day22(redlining) for leaftlet examples
@@ -16,20 +18,30 @@ library(leaflet)    # for fortifying shapefiles
 library(leaflet.extras)   # For leaflet heatmaps
 ```
 
-## Read in shapefiles that will be used.
+## Read in shapefiles.
 
 ```{r echo=TRUE,message=FALSE}
 # Read in the communities data
 # DSN - location of shp files
 # Layer - name of all the files in DSN (different extensions, same names)
-mn_comm <- st_read(dsn="Communities-SHP/", layer="Minneapolis_Communities")
+mn_comm <- st_read(dsn="Communities-SHP/", layer="Minneapolis_Communities",
+                   # Stop printing of reading in st_read
+                   quiet=TRUE)
 minn_pre <- st_read(dsn="Minneapolis_Police_Precincts-SHP/",
-                         layer="Police_Precincts")
+                         layer="Police_Precincts",
+                    quiet=TRUE)
 police_shootings <- st_read(dsn="Police_Officer_Involved_Shootings/",
-                            layer="Police_Officer_Involved_Shootings")
-
+                            layer="Police_Officer_Involved_Shootings",
+                            quiet=TRUE)
 police_force <- st_read(dsn="Police_Use_of_Force",
-                        layer="Police_Use_of_Force")
+                        layer="Police_Use_of_Force",
+                        quiet=TRUE)
+# https://cms9files.revize.com/richfieldmn/Document_Center/Department/Community%20Development/Planning%20and%20Zoning/Cedar%20Avenue%20Corridor/CedarCorridorComprehensive.pdf
+# https://www.dot.state.mn.us/corridorsofcommerce/about.html
+# https://opendata.minneapolismn.gov/datasets/cityoflakes::goods-and-services-corridor/
+corridors <- st_read(dsn="Goods_and_Services_Corridor",
+                     layer="Goods_and_Services_Corridor",
+                     quiet=TRUE)
 
 # -93.029651 CenterLong not in minnneapolis
 # 45.196298 CenterLat
@@ -41,35 +53,49 @@ police_shootings <- police_shootings |>
 # glimpse(police_shootings)
 # glimpse(police_force)
 ```
-## Build a "base" plot from the minneapolis precints shpfiles.
+
+## Build a base plot
 
 ```{r}
-pre_pal <- colorFactor(palette="Set2",
-                       domain=minn_pre$PRECINCT)
+# Label fatal shootings as red, non-fatal as red.
+fatalPal <- colorFactor(palette=c("orange", "red"),
+                          domain=police_shootings$SubjectFat)
+#glimpse(corridors)
 pre <-
   leaflet() |> 
-  # addTiles() |>
-  addProviderTiles(providers$CartoDB.DarkMatter) |>
-  addPolygons(data=minn_pre,
-              weight = 5,
-              color = ~pre_pal(PRECINCT),
-              opacity = 1,
-              fillOpacity=1,
-              dashArray="3",
-              fillColor = ~PRECINCT#,
-              #popup=~PRECINCT
-              ) |>
+  addProviderTiles(providers$CartoDB.DarkMatter, group = "Dark") |>
+  addTiles(group = "Default") |>
+  addProviderTiles(providers$CartoDB.Positron, group = "Default2") |>
+  addPolylines(data=corridors,
+              weight=1,
+              color="white") |>
+  addCircleMarkers(data=police_shootings,
+                   ~CenterLong,
+                   ~CenterLati,
+                   color=fatalPal(police_shootings$SubjectFat),
+                   radius=4,
+                   # popup=~as.character(SubjectFat),
+                   stroke=FALSE, fillOpacity=1) |>
   addLegend(
-    data = minn_pre,
-    title = "Precints",
-    pal = pre_pal,
-    values = ~PRECINCT,
-    opacity = 0.6
+    data = police_shootings,
+    title = lapply("Police Brutality<br>(Fatal Shootings)",htmltools::HTML),
+    pal = fatalPal,
+    values = ~police_shootings$SubjectFat,
+    opacity = 0.6,
+    group = "Brut. Leg."
+  ) |>
+  addLayersControl(
+    baseGroups = c("Dark", "Default", "Default2"),
+    overlayGroups = c("Brut. Leg."),
+    # options = layersControlOptions(collapsed = FALSE),
+    position = "topleft"
   )
 pre
 ```
 
-## Scrape information from some random website. Couldn't find an open dataset of neighborhoods grouped by community, could also just use a heatmap for neighborhoods (prob. much better).
+## Scraping html
+
+Scrape information from url containing neighborhoods by community. Couldn't find an open dataset of neighborhoods grouped by community. I could also just use a heatmap for neighborhoods to show more information.
 
 ```{r}
 library(rvest)
@@ -97,7 +123,6 @@ html_neigh_uls <- url |>
   html_elements(".infinite-single-article-content ul")
 #html_neigh_uls
 
-##--------------------WORKING-----------------------------##
 neigh_list <- list()
 # loop through ul's in html_neigh
 #html_neigh_uls
@@ -172,27 +197,55 @@ df1[nrow(df1) + 1,] <- c("University", "Prospect Park East River Road")
 
 #write.csv(df1, "some_name.csv")
 ```
-## Aggregate number of crimes to attach to communitys in Minneapolis.
+## Aggregating data
+
+Aggregate number of crimes and summary of information to attach to communitys in Minneapolis.
 
 ```{r}
-#mn_comm # just shapes of communities
+# Join police_force dataset and 
+# scraped neighbordhoods by community df.
+# https://opendata.minneapolismn.gov/datasets/cityoflakes::police-use-of-force/about
+
+# Filter down dataset.
+columnsOfInterest <- c("SubjectInj",
+                       "Neighborho",
+                       "Race",
+                       "Sex",
+                       "ForceType",
+                       "EventAge",
+                       "Precinct")
+
 aggregated <- police_force |>
+  select(all_of(columnsOfInterest)) |>
+    mutate(isMale = ifelse(Sex == "Male", 1, 0),
+         isFemale = ifelse(Sex == "Female", 1, 0),
+         isInjured = ifelse(SubjectInj == "Yes", 1, 0),
+         # Take top 3 force used by police, as shown in their bar charts.
+         isBodilyForce = ifelse(ForceType == "Bodily Force", 1, 0),
+         isTaser = ifelse(ForceType == "Taser", 1, 0),
+         isChemicalIrritant = ifelse(ForceType == "Chemical Irritant", 1, 0),
+         isPoc = ifelse(Race == "White", 0, 1))
+  
+#glimpse(aggregated)
+
+aggreg <- aggregated |>
   inner_join(df1, c("Neighborho" = "Neighborhood"))
 
-glimpse(aggregated)
+#aggregated
 
-police_force
-
-aggregated <- aggregated |>
-  mutate(is_m = if(Sex == "Male"){1}else{0},
-         is_f = if(Sex == "Female"){1}else{0})
-
-summ <- aggregated |>
+summ <- aggreg |>
   group_by(Community) |>
   summarize(num_crimes = n(),
-            rate_m=sum(aggregated$Sex=="Male"),
-            rate_f=sum(aggregated$Sex=="Male"))
-view(summ)
+            # Remove na's, else you get NA as result.
+            rateM = sum(isMale, na.rm=TRUE)/num_crimes * 100,
+            rateF = sum(isFemale, na.rm=TRUE)/num_crimes * 100,
+            rateOther = (1 - ((rateM/100) + (rateF/100))) * 100,
+            rateInjured = sum(isInjured, na.rm=TRUE)/num_crimes * 100,
+            rateBodilyForce = sum(isBodilyForce, na.rm=TRUE)/num_crimes * 100,
+            rateTasered = sum(isTaser, na.rm=TRUE)/num_crimes * 100,
+            rateChemicalIrritant = sum(isChemicalIrritant, na.rm=TRUE)/num_crimes * 100,
+            ratePoc = sum(isPoc, na.rm=TRUE)/num_crimes * 100)
+#view(summ)
 
 # have to drop geometry to join with other spatial data frame (mn_comm)
 summ <- st_drop_geometry(summ)
@@ -200,47 +253,195 @@ mn_comm <- mn_comm |>
   inner_join(summ, by=c("CommName"="Community"))
 #mn_comm
 ```
-## In the following choropleth map, community boundaries are drawn on the map. On top of it, there is also another layer for the five police precincts in Minneapolis. From the choropleth, we can conclude that some communities are more dangerous than others, but this could also be because the population size in the city is denser than in the suburbs. We can also see that you are more likely to be shot by an officer or killed in the more dangerous communities. Population size is a question that I would delve into in the future by finding a dataset for populations per neighborhood or by the community to further illustrate in this map.
+## Thoughts
+
+In the following choropleth map, community boundaries are drawn on the map. From the choropleth, we can conclude that some communities are more dangerous than others, but this could also be because the population size in the city is denser than in the suburbs. We can also see that you are more likely to be shot by an officer or killed in the more dangerous communities. Population size is a question that I would delve into in the future by finding a dataset for populations per neighborhood or by the community to further illustrate in this map.
 
 ```{r}
 # https://rstudio.github.io/leaflet/choropleths.html
 
-# Use continous color pallete for chloropeth.
+# Use continuous color pallete for chloropeth.
 neighPal <- colorFactor(palette="YlOrRd",
                                  domain=mn_comm$num_crimes)
 
-# Label fatal shootings as red, non-fatal as red.
-fatalPal <- colorFactor(palette=c("orange", "red"),
-                          domain=police_shootings$SubjectFat)
-labels <- sprintf(
-  "<strong>%s</strong><br>Total Crimes: %d",
-  mn_comm$CommName, mn_comm$num_crimes
-) %>% lapply(htmltools::HTML)
+# Make format for community labels.
+community <- "<strong>%s</strong>"
+totalCrimes <- "Total Crimes: %d"
+rateRace <- "Person of color: %.2f%%"
+rateM <- "Male: %.2f%%"
+rateF <- "Female: %.2f%%"
+rateO <- "Other: %.2f%%"
+rateInj <- "Suspect Injured: %.2f%%"
+rateBody <- "Bodily Force Used: %.2f%%"
+rateTaser <- "Tasered: %.2f%%"
+rateChemical <- "Chemical Force: %.2f%%"
 
+# Concatenate with <br> for newline in label.
+labelFormat <- paste(community,
+                   totalCrimes,
+                   rateRace,
+                   rateM,
+                   rateF,
+                   rateO,
+                   rateInj,
+                   rateBody,
+                   rateTaser,
+                   rateChemical,
+                   sep="<br>")
+labels <- sprintf(
+  labelFormat,
+  mn_comm$CommName, 
+  mn_comm$num_crimes,
+  mn_comm$ratePoc,
+  mn_comm$rateM, 
+  mn_comm$rateF,
+  mn_comm$rateOther,
+  mn_comm$rateInjured,
+  mn_comm$rateBodilyForce,
+  mn_comm$rateTasered,
+  mn_comm$rateChemicalIrritant) |> 
+  lapply(htmltools::HTML)
+
+# Plot the aggregated community data.
 mn <- pre |>
   addPolygons(data=mn_comm,
               weight = 1,
               color = "white",
               fillColor = ~neighPal(num_crimes),
-              fillOpacity = 0.3,
+              fillOpacity = 0.4,
               highlight = highlightOptions(weight=3,
                                            color="red",
                                            bringToFront=TRUE),
               label=labels,
-              labelOptions = labelOptions(style=list("font-weight"="normal"
-                                                 ,padding="3px 8px"),
-                                          textsize = "15px",
-                                          direction = "auto"))
+              labelOptions = labelOptions(style=list(
+                # Add css styling here.
+                "font-weight"="normal", # step below bold
+                "padding"="3px 8px",
+                # rgb(255,255,255) = white, opacity
+                # setting opacity doesnt work for some reason.
+                "background"="rgba(255, 255, 255, .70)"),
+                textsize = "15px",
+                direction = "auto")) |>
+  addLegend(
+    data = mn_comm,
+    title = "Total Crimes",
+    pal = neighPal,
+    values = ~num_crimes,
+    opacity = 0.6,
+    group = "Comm. Leg."
+  ) |>
+  # https://rstudio.github.io/leaflet/showhide.html
+  addLayersControl(
+    baseGroups = c("Dark", "Default", "Default2"),
+    overlayGroups = c("Comm. Leg.", "Brut. Leg."),
+    #options = layersControlOptions(collapsed = FALSE)
+    position = "topleft"
+  )
 mn
-# Police Shootings in Minneapolis Neighborhoods
-# Orange - non-fatal
-# Red - person died
-mn |>
-  addCircleMarkers(data=police_shootings,
-             ~CenterLong,
-             ~CenterLati,
-             color=fatalPal(police_shootings$SubjectFat),
-             radius=4,
-             # popup=~as.character(SubjectFat),
-             stroke=FALSE, fillOpacity=1)
 ```
+## Are some police precincts more violent than others?
+
+One of the most notable here is Precinct #1, which has used chemical force in 24% of the total crimes in their area. Meanwhile, other police precincts have stayed below 8% (next highest). Another notable difference is that the darker regions (more crime) have had more injuries sustained to the suspect, specifically precincts 1, 3, and 4. Precinct #1, being an outlier from the 3, was it the use of chemical force that lowered overall injuries (possibly incapacitating the suspect before getting any more violent?). As I analyzed the graphic, I noticed that many fatal police shootings were nearing a precinct's border and heading to the 'safer' neighborhoods. I thought the suspects could have been fleeing on main roads where travel was easier. To confirm this, I downloaded an open dataset from Minneapolis, added the good and services corridors that make travel easier, and confirmed my suspicion. Most of the shootings tend to happen around these roads. For example, in precinct 5, three shootings happened on Franklin Ave., which does not seem like a coincidence. I believe these suspects were fleeing from precinct 3 (most likely) or 4. Overall I think some precincts are more violent than others, but I cannot conclude this based on my observations. This could be a factor of more crime because the population is higher or because with bigger police forces (and less budget), bad recruits get in and push the numbers up.
+
+```{r}
+# Convert to doubles, join on Precinct
+minn_pre <- minn_pre |>
+  mutate("Precinct" = as.double(PRECINCT))
+aggregated <- aggregated |>
+  mutate("Precinct" = as.double(Precinct))
+
+#minn_pre <- st_drop_geometry(minn_pre)
+#glimpse(minn_pre)
+#glimpse(police_force)
+#glimpse(aggregated)
+
+# Drop aggregated geometry column.
+aggregated <- st_drop_geometry(aggregated)
+# Aggregate data by precinct.
+precint_data <- aggregated |>
+  group_by(Precinct) |>
+  summarize(num_crimes = n(),
+            # Remove na's, else you get NA as result.
+            rateM = sum(isMale, na.rm=TRUE)/num_crimes * 100,
+            rateF = sum(isFemale, na.rm=TRUE)/num_crimes * 100,
+            rateOther = (1 - ((rateM/100) + (rateF/100))) * 100,
+            rateInjured = sum(isInjured, na.rm=TRUE)/num_crimes * 100,
+            rateBodilyForce = sum(isBodilyForce, na.rm=TRUE)/num_crimes * 100,
+            rateTasered = sum(isTaser, na.rm=TRUE)/num_crimes * 100,
+            rateChemicalIrritant = sum(isChemicalIrritant, na.rm=TRUE)/num_crimes * 100,
+            ratePoc = sum(isPoc, na.rm=TRUE)/num_crimes * 100)
+
+#glimpse(precint_data)
+
+# Join precint data.
+precint_data <- precint_data |>
+  inner_join(minn_pre, "Precinct") |>
+  group_by(Precinct)
+
+#glimpse(precint_data)
+
+# https://stackoverflow.com/questions/68728154/leaflet-map-error-in-polygondata-defaultdata-dont-know-how-to-get-path-dat
+precint_data <- sf::st_as_sf(precint_data)
+
+# Make new labels for precinct data.
+policeLabels <- sprintf(
+  labelFormat,
+  precint_data$Precinct, 
+  precint_data$num_crimes,
+  precint_data$ratePoc,
+  precint_data$rateM, 
+  precint_data$rateF,
+  precint_data$rateOther,
+  precint_data$rateInjured,
+  precint_data$rateBodilyForce,
+  precint_data$rateTasered,
+  precint_data$rateChemicalIrritant) |> 
+  lapply(htmltools::HTML)
+
+# Create pallete for precinct dataframe.
+policePal <- colorFactor(palette="Blues",
+                                 domain=precint_data$num_crimes)
+pre_pal <- colorFactor(palette="Set2",
+                       domain=minn_pre$PRECINCT)
+# Plot data.
+pre |>
+  addPolygons(data=precint_data,
+              weight = 3,
+              color = ~pre_pal(PRECINCT),
+              dashArray = "3",
+              fillColor = ~policePal(num_crimes),
+              fillOpacity = 0.3,
+              highlight = highlightOptions(weight=5,
+                                           color="black",
+                                           bringToFront=TRUE),
+              label=policeLabels,
+              labelOptions = labelOptions(style=list(
+                "font-weight"="normal",
+                "padding"="3px 8px",
+                "background"="rgba(255, 255, 255, .70)"),
+                textsize = "15px",
+                direction = "auto")) |>
+  addLegend(data = minn_pre,
+            title = "Precincts",
+            pal = pre_pal,
+            values = ~PRECINCT,
+            opacity = 0.6,
+            group = "Prec. Leg.") |>
+  addLegend(data = precint_data,
+            title = "Total Crimes",
+            pal= policePal,
+            value = ~num_crimes,
+            opacity = 0.6,
+            group = "Crimes Leg.") |>
+  # https://rstudio.github.io/leaflet/showhide.html
+  addLayersControl(
+    baseGroups = c("Dark", "Default", "Default2"),
+    overlayGroups = c("Prec. Leg.", "Crimes Leg.", "Brut. Leg."),
+    #options = layersControlOptions(collapsed = FALSE)
+    position = "topleft"
+  )
+```
+
+
+
+
